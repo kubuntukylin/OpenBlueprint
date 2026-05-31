@@ -1,6 +1,6 @@
 # DD Platform
 
-AI-Powered Agent Generation & Management Platform — 可视化的低代码微服务开发平台，集成 VSCode + Claude Code 能力，通过自然语言描述自动生成、构建和管理微服务 Agent。
+AI-Powered Agent Generation & Management Platform — 可视化的低代码微服务开发平台，集成 Claude Code 能力，通过自然语言描述自动生成、构建和管理微服务 Agent。
 
 ## 系统架构
 

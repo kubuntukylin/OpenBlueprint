@@ -132,8 +132,6 @@ npm run dev
 
 ### 6. Agent 代码生成
 
-`[SCREENSHOT: agent-generate.png]`
-*截取 Process Panel 的 Agent 详情页，展示代码生成进度和输出文件列表*
 
 **生成方式：**
 - **Claude Code Generate**：调用 Claude Code CLI，AI 自主创建完整项目文件
@@ -147,8 +145,6 @@ npm run dev
 
 ### 7. Process 面板
 
-`[SCREENSHOT: process-panel.png]`
-*截取 Process Panel 的 Agent Tab 视图，展示各 Agent 的状态、生成进度、Build/Re 按钮*
 
 - 每个 Agent 一个 Tab
 - 状态标签：`pending` / `queued` / `generating` / `completed` / `failed`
@@ -158,18 +154,12 @@ npm run dev
 
 ### 8. Settings 配置
 
-`[SCREENSHOT: settings-llm.png]`
-*截取 Settings 页面，展示 LLM 配置表单，注意 API Key 以掩码形式显示*
-
 **可配置项：**
 - **LLM Configurations**：Provider、API Key（掩码显示）、Model、Base URL、Temperature、Max Tokens、Thinking 开关
 - **System Settings**：Theme（dark/light）、Font Size、Default Output Path、Max Retries、Generation Timeout
 - **Test** 按钮验证 API 连通性
 
 ### 9. Skills 管理
-
-`[SCREENSHOT: skills-panel.png]`
-*截取 Skills Panel，展示系统预置的 30+ 技能模板列表*
 
 系统预置了 30+ 技能模板：
 - Build Mode Output Format

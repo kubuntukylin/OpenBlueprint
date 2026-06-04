@@ -1,5 +1,5 @@
 {
-  "name": "dd-platform",
+  "name": "openblueprint",
   "version": "0.1.0",
   "description": "AI-Powered Agent Generation & Management Platform",
   "main": "./src/server/index.ts",

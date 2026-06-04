@@ -1,10 +1,10 @@
 // ============================================================
-// MCP Server — stdio JSON-RPC 2.0 proxy to DD Platform HTTP API
+// MCP Server — stdio JSON-RPC 2.0 proxy to OpenBlueprint HTTP API
 // Spawned by Claude Code CLI via --mcp-config
 // Does NOT import db.ts/llm.ts — uses fetch to call localhost:3001
 // ============================================================
 
-const DD_API = process.env.DD_API_URL || 'http://localhost:3001'
+const OB_API = process.env.OB_API_URL || 'http://localhost:3001'
 const TIMEOUT_MS = 30000
 
 // ---- JSON-RPC 2.0 helpers ----
@@ -23,7 +23,7 @@ function write(resp: JsonRpcResponse) {
 
 // ---- HTTP helper ----
 async function apiFetch(method: string, path: string, body?: unknown): Promise<unknown> {
-  const url = DD_API + path
+  const url = OB_API + path
   const opts: RequestInit = {
     method,
     headers: { 'Content-Type': 'application/json' },
@@ -55,7 +55,7 @@ const TOOLS: Record<string, { def: ToolDef; handler: (args: Record<string,unknow
   list_agents: {
     def: {
       name: 'list_agents',
-      description: 'List all agents in a DD Platform project. Returns each agent\'s id, name, description, status, technologies, inputs, outputs, and dependencies. Use this FIRST whenever the user asks about agents — never assume you know what agents exist.',
+      description: 'List all agents in an OpenBlueprint project. Returns each agent\'s id, name, description, status, technologies, inputs, outputs, and dependencies. Use this FIRST whenever the user asks about agents — never assume you know what agents exist.',
       inputSchema: {
         type: 'object',
         properties: { projectId: { type: 'string', description: 'Optional project ID to filter by. If omitted, lists all agents across all projects.' } },
@@ -82,7 +82,7 @@ const TOOLS: Record<string, { def: ToolDef; handler: (args: Record<string,unknow
   create_agent: {
     def: {
       name: 'create_agent',
-      description: 'Create a new agent in a DD Platform project. The agent is created as "pending" and will appear in the project graph. Do NOT create agents that already exist — use update_agent instead.',
+      description: 'Create a new agent in an OpenBlueprint project. The agent is created as "pending" and will appear in the project graph. Do NOT create agents that already exist — use update_agent instead.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -143,7 +143,13 @@ const TOOLS: Record<string, { def: ToolDef; handler: (args: Record<string,unknow
       },
     },
     handler: async (args) => {
-      const agent = await apiFetch('PUT', '/api/agents/' + args.agentId, args)
+      // Separate agent fields from dependencies
+      const body: Record<string,unknown> = {}
+      const passthrough = ['agentId','name','description','responsibilities','technologies','inputs','outputs','complexity']
+      for (const k of passthrough) { if (args[k] !== undefined) body[k] = args[k] }
+      // dependencies is a special case — requires relationship management in the route
+      if (Array.isArray(args.dependencies)) body['dependencies'] = args.dependencies
+      const agent = await apiFetch('PUT', '/api/agents/' + args.agentId, body)
       return { content: [{ type: 'text', text: JSON.stringify(agent, null, 2) }] }
     },
   },
@@ -258,7 +264,7 @@ const TOOLS: Record<string, { def: ToolDef; handler: (args: Record<string,unknow
   list_projects: {
     def: {
       name: 'list_projects',
-      description: 'List all DD Platform projects. Use this to get project IDs and names before operating on agents within a project.',
+      description: 'List all OpenBlueprint projects. Use this to get project IDs and names before operating on agents within a project.',
       inputSchema: { type: 'object', properties: {} },
     },
     handler: async () => {
@@ -289,6 +295,69 @@ const TOOLS: Record<string, { def: ToolDef; handler: (args: Record<string,unknow
         }],
       }
     },
+
+    create_relationship: {
+      def: {
+        name: 'create_relationship',
+        description: 'Create a relationship between two agents. Types: depends_on (Agent A depends on B being ready first), communicates_with (runtime data exchange), shares_data (shared data store). Creating relationships is ESSENTIAL for correct build order and service discovery.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            sourceAgentId: { type: 'string', description: 'The source agent ID (the one that depends on or communicates with the target)' },
+            targetAgentId: { type: 'string', description: 'The target agent ID (the one being depended on / communicated with)' },
+            relationshipType: { type: 'string', description: 'depends_on, communicates_with, or shares_data' },
+            description: { type: 'string', description: 'What data flows between them (e.g., "Auth tokens", "Device telemetry")' },
+          },
+          required: ['sourceAgentId', 'targetAgentId', 'relationshipType'],
+        },
+      },
+      handler: async (args) => {
+        const body = {
+          sourceAgentId: args.sourceAgentId,
+          targetAgentId: args.targetAgentId,
+          relationshipType: args.relationshipType || 'depends_on',
+          description: args.description || '',
+        }
+        const rel = await apiFetch('POST', '/api/relationships', body)
+        return { content: [{ type: 'text', text: JSON.stringify(rel, null, 2) }] }
+      },
+    },
+
+    delete_relationship: {
+      def: {
+        name: 'delete_relationship',
+        description: 'Delete a relationship between two agents. Use this to remove incorrect or outdated connections.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            relationshipId: { type: 'string', description: 'The relationship ID to delete (from get_project_context relationships)' },
+          },
+          required: ['relationshipId'],
+        },
+      },
+      handler: async (args) => {
+        await apiFetch('DELETE', '/api/relationships/' + args.relationshipId)
+        return { content: [{ type: 'text', text: `Relationship ${args.relationshipId} deleted.` }] }
+      },
+    },
+
+    analyze_relationships: {
+      def: {
+        name: 'analyze_relationships',
+        description: 'CRITICAL — Call this AFTER creating ALL agents in a project. Uses AI to analyze agent interfaces (inputs/outputs) and automatically create depends_on, communicates_with, and shares_data relationships. This MUST be called before code generation to ensure correct build order.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectId: { type: 'string', description: 'Project ID to analyze' },
+          },
+          required: ['projectId'],
+        },
+      },
+      handler: async (args) => {
+        const result = await apiFetch('POST', '/api/projects/' + args.projectId + '/analyze-relationships', {})
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+      },
+    },
   },
 }
 
@@ -299,7 +368,7 @@ async function handleRequest(req: JsonRpcRequest): Promise<JsonRpcResponse> {
       return ok(req.id, {
         protocolVersion: '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'dd-platform-mcp', version: '1.0.0' },
+        serverInfo: { name: 'openblueprint-mcp', version: '1.0.0' },
       })
 
     case 'tools/list':
@@ -358,4 +427,4 @@ process.stdin.on('data', (chunk: string) => {
 })
 
 process.stdin.on('end', () => { /* Claude Code closed stdin */ })
-process.stderr.write('[mcp-server] DD Platform MCP Server started, API: ' + DD_API + '\n')
+process.stderr.write('[mcp-server] OpenBlueprint MCP Server started, API: ' + OB_API + '\n')

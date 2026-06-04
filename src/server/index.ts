@@ -1,5 +1,5 @@
 // ============================================================
-// DD Platform Server — Express + WebSocket
+// OpenBlueprint Server — Express + WebSocket
 // ============================================================
 import express from 'express'
 import cors from 'cors'
@@ -10,6 +10,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { getDB, initDB, saveDB } from './db'
 import { registerRoutes } from './routes'
+import { APP_NAME } from '../shared/constants'
 
 const PORT = parseInt(process.env.PORT || '3001', 10)
 const isDev = process.env.NODE_ENV !== 'production'
@@ -101,7 +102,7 @@ async function main() {
   })
 
   server.listen(PORT, () => {
-    console.log(`\n  DD Platform  http://localhost:${PORT}  |  ws://localhost:${PORT}/ws\n`)
+    console.log(`\n  ${APP_NAME}  http://localhost:${PORT}  |  ws://localhost:${PORT}/ws\n`)
   })
 }
 

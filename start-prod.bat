@@ -1,6 +1,6 @@
 @echo off
-title DD Platform
-echo Starting DD Platform (Production Mode)...
+title OpenBlueprint
+echo Starting OpenBlueprint (Production Mode)...
 echo.
 echo App: http://localhost:3001
 echo.

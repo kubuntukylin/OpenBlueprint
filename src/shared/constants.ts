@@ -1,4 +1,4 @@
-export const APP_NAME = 'DD Platform'
+export const APP_NAME = 'OpenBlueprint'
 export const APP_VERSION = '0.1.0'
 export const DEFAULT_OUTPUT_DIR = 'output'
 export const MAX_GENERATION_RETRIES = 3

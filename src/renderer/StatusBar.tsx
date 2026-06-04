@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from './api'
 import { useUIStore } from './stores'
+import { APP_NAME } from '../shared/constants'
 
 export default function StatusBar() {
   const [info, setInfo] = useState({ provider: '', model: '', hasKey: false, loaded: false })
@@ -42,7 +43,7 @@ export default function StatusBar() {
           <span className="text-text-tertiary">{skillStats.total - skillStats.active} off</span>
         </button>
       )}
-      <span className="text-text-tertiary">DD Platform</span>
+      <span className="text-text-tertiary">{APP_NAME}</span>
     </div>
   )
 }

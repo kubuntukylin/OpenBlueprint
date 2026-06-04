@@ -2,10 +2,11 @@ import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { useGenerationStore, useProjectStore, useAgentStore } from './stores'
+import { useGenerationStore, useProjectStore, useAgentStore, useUIStore } from './stores'
 import { api } from './api'
 
 export default function ProcessPanel() {
+  const isVisible = useUIStore(s => s.activeTab === 'process')
   const logs = useGenerationStore(s => s.logs)
   const sessions = useGenerationStore(s => s.sessions)
   const terminalText = useGenerationStore(s => s.terminalText)
@@ -84,6 +85,13 @@ export default function ProcessPanel() {
     xtermRef.current = term
     return () => { obs.disconnect(); term.dispose(); xtermRef.current = null; initedRef.current = false }
   }, [])
+
+  // Re-fit xterm when panel becomes visible (was display:none with 0 dimensions)
+  useEffect(() => {
+    if (isVisible && xtermRef.current) {
+      setTimeout(() => { try { xtermRef.current!.resize(xtermRef.current!.cols, xtermRef.current!.rows) } catch { /* ok */ } }, 50)
+    }
+  }, [isVisible])
 
   // Tick every second for elapsed time display
   useEffect(() => {

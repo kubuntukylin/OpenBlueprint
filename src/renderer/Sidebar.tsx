@@ -4,6 +4,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useUIStore, useProjectStore, useAgentStore, useChatStore } from './stores'
 import { api } from './api'
+import { APP_NAME } from '../shared/constants'
 
 // SVG icons
 const IC = {
@@ -88,6 +89,28 @@ export default function Sidebar() {
         const a = (d as { agent: Record<string, unknown> }).agent
         if (a) useAgentStore.getState().updateAgent(a.id as string, a as never)
       }),
+      api.on('relationship:created', (d: unknown) => {
+        const r = (d as { relationship: Record<string, unknown> }).relationship
+        if (r) useAgentStore.getState().addRelationship(r as never)
+      }),
+      api.on('relationship:deleted', (d: unknown) => {
+        const data = d as { relationshipId: string }
+        if (data.relationshipId) {
+          useAgentStore.getState().setRelationships(
+            useAgentStore.getState().relationships.filter(r => r.id !== data.relationshipId)
+          )
+        }
+      }),
+      api.on('project:relationships-updated', async () => {
+        // Refresh relationships for active project
+        const pid = useProjectStore.getState().activeProjectId
+        if (pid) {
+          try {
+            const rels = await api.rels.list(pid)
+            useAgentStore.getState().setRelationships(rels as never)
+          } catch { /* ok */ }
+        }
+      }),
     ]
     return () => unsub.forEach(f => f())
   }, [])
@@ -103,10 +126,22 @@ export default function Sidebar() {
   }
 
   const delProject = async (p: Record<string,unknown>) => {
-    if (!confirm(`Delete "${p.name}" and ALL its agents and conversations?`)) return
-    await api.projects.del(p.id as string)
-    if (activeProjectId === p.id) setActiveProject(null)
-    reload()
+    try {
+      // Phase 1: get preview of what will be deleted
+      const preview = await api.projects.del(p.id as string, false) as Record<string,unknown>
+      if (preview.confirmRequired) {
+        const pv = preview.preview as Record<string,unknown>
+        const agentNames = (pv.agentNames as string[]) || []
+        const detail = agentNames.length > 0
+          ? `\n\nAgents to delete (${pv.agents}):\n${agentNames.map((n: string) => '  • ' + n).join('\n')}\n\nConversations: ${pv.conversations}\nRelationships: ${pv.relationships}`
+          : ''
+        if (!confirm(`Delete "${p.name}" and ALL its contents?${detail}\n\nThis cannot be undone.`)) return
+      }
+      // Phase 2: confirmed delete
+      await api.projects.del(p.id as string, true)
+      if (activeProjectId === p.id) setActiveProject(null)
+      reload()
+    } catch (err) { alert('Delete failed: ' + (err as Error).message) }
   }
 
   const saveProjectEdit = async (id: string, name: string, desc: string, rules: string) => {
@@ -132,11 +167,11 @@ export default function Sidebar() {
   // ---- System ----
   const shutdown = async () => {
     setPwMenu(false)
-    if (confirm('Shut down DD Platform?')) { try { await api.shutdown() } catch { /* gone */ } }
+    if (confirm(`Shut down ${APP_NAME}?`)) { try { await api.shutdown() } catch { /* gone */ } }
   }
   const restart = async () => {
     setPwMenu(false)
-    if (confirm('Restart DD Platform?')) { try { await api.restart() } catch { /* gone */ } }
+    if (confirm(`Restart ${APP_NAME}?`)) { try { await api.restart() } catch { /* gone */ } }
   }
 
   // ---- Render ----
@@ -148,7 +183,7 @@ export default function Sidebar() {
     <aside className="w-[260px] bg-bg-secondary border-r border-border flex flex-col select-none flex-shrink-0">
       {/* Header */}
       <div className="h-10 px-4 flex items-center border-b border-border">
-        <span className="text-xs font-semibold tracking-wider text-text-secondary uppercase">DD Platform</span>
+        <span className="text-xs font-semibold tracking-wider text-text-secondary uppercase">{APP_NAME}</span>
       </div>
 
       {/* Mode toggle */}

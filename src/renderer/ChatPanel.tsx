@@ -426,7 +426,7 @@ export default function ChatPanel() {
                     <div className="flex items-center gap-2 mb-1.5">
                       <span className="w-2 h-2 bg-accent rounded-full animate-pulse" />
                       <span className="text-[11px] font-bold text-accent uppercase">TOOL</span>
-                      <span className="text-[12px] font-mono text-text">{ev.name?.replace('mcp__dd-platform__', '')}</span>
+                      <span className="text-[12px] font-mono text-text">{ev.name?.replace(/^mcp__[^_]+__/, '')}</span>
                     </div>
                     {ev.input && <pre className="text-[11px] text-text-secondary overflow-x-auto max-h-32 overflow-y-auto">{JSON.stringify(ev.input, null, 2)}</pre>}
                   </div>

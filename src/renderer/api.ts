@@ -62,7 +62,7 @@ export const api = {
     list: () => req<Record<string,unknown>[]>('/api/projects'),
     create: (d: Record<string,unknown>) => req<Record<string,unknown>>('/api/projects', { method: 'POST', body: JSON.stringify(d) }),
     update: (id: string, d: Record<string,unknown>) => req<Record<string,unknown>>(`/api/projects/${id}`, { method: 'PUT', body: JSON.stringify(d) }),
-    del: (id: string) => req('/api/projects/' + id, { method: 'DELETE' }),
+    del: (id: string, confirm?: boolean) => req('/api/projects/' + id + (confirm ? '?confirm=true' : ''), { method: 'DELETE' }),
   },
 
   // ---- Agents ----

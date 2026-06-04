@@ -1,5 +1,5 @@
 // ============================================================
-// DD Platform — Shared Types
+// OpenBlueprint — Shared Types
 // Single source of truth for all data structures
 // ============================================================
 

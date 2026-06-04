@@ -195,6 +195,19 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
         } catch { /* spec_json is malformed */ }
       }
     }
+    // Handle dependencies update — replace all depends_on relationships for this agent
+    if (Array.isArray(req.body.dependencies)) {
+      // Delete existing depends_on relationships where this agent is the source
+      db.prepare("DELETE FROM agent_relationships WHERE source_agent_id=? AND relationship_type='depends_on'").run(req.params.id)
+      const t = now()
+      for (const depName of req.body.dependencies) {
+        const projectAgent = db.prepare('SELECT project_id FROM agents WHERE id=?').get(req.params.id) as Record<string,unknown> | undefined
+        const tgt = db.prepare('SELECT id FROM agents WHERE (id=? OR name=?) AND project_id=?').get(depName, depName, projectAgent?.project_id)
+        if (tgt && (tgt as Record<string,unknown>).id !== req.params.id) {
+          try { db.prepare('INSERT INTO agent_relationships (id,source_agent_id,target_agent_id,relationship_type,description,created_at) VALUES (?,?,?,?,?,?)').run(rnd(), req.params.id, (tgt as Record<string,unknown>).id, 'depends_on', '', t) } catch { /* dup */ }
+        }
+      }
+    }
     res.json(db.prepare('SELECT * FROM agents WHERE id=?').get(req.params.id)); saveDB()
   })
 
@@ -329,6 +342,126 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
       ? db.prepare('SELECT ar.* FROM agent_relationships ar JOIN agents a ON ar.source_agent_id=a.id WHERE a.project_id=?').all(pid)
       : db.prepare('SELECT * FROM agent_relationships').all()
     res.json(rels)
+  })
+
+  app.post('/api/relationships', (req, res) => {
+    const { sourceAgentId, targetAgentId, relationshipType, description } = req.body
+    if (!sourceAgentId || !targetAgentId) return res.status(400).json({ error: 'sourceAgentId and targetAgentId required' })
+    const type = relationshipType || 'depends_on'
+    if (!['depends_on', 'communicates_with', 'shares_data'].includes(type)) {
+      return res.status(400).json({ error: `Invalid relationship type: ${type}` })
+    }
+    const id = rnd()
+    try {
+      db.prepare('INSERT INTO agent_relationships (id,source_agent_id,target_agent_id,relationship_type,description,created_at) VALUES (?,?,?,?,?,?)')
+        .run(id, sourceAgentId, targetAgentId, type, description || '', now())
+      saveDB()
+      const rel = db.prepare('SELECT * FROM agent_relationships WHERE id=?').get(id)
+      broadcast('relationship:created', { relationship: rel })
+      res.json(rel)
+    } catch (e) {
+      if ((e as Error).message?.includes('UNIQUE')) return res.status(409).json({ error: 'Relationship already exists' })
+      throw e
+    }
+  })
+
+  app.delete('/api/relationships/:id', (req, res) => {
+    const rel = db.prepare('SELECT * FROM agent_relationships WHERE id=?').get(req.params.id)
+    if (!rel) return res.status(404).json({ error: 'Relationship not found' })
+    db.prepare('DELETE FROM agent_relationships WHERE id=?').run(req.params.id)
+    saveDB()
+    broadcast('relationship:deleted', { relationshipId: req.params.id })
+    res.json({ success: true })
+  })
+
+  // Auto-analyze and create relationships using LLM
+  app.post('/api/projects/:id/analyze-relationships', async (req, res) => {
+    const projectId = req.params.id
+    const project = db.prepare('SELECT * FROM projects WHERE id=?').get(projectId) as Record<string,unknown> | undefined
+    if (!project) return res.status(404).json({ error: 'Project not found' })
+
+    // Get active LLM config
+    let row = db.prepare('SELECT * FROM llm_configurations WHERE is_default=1 AND is_active=1').get() as Record<string,unknown> | undefined
+    if (!row) row = db.prepare('SELECT * FROM llm_configurations WHERE is_active=1 LIMIT 1').get() as Record<string,unknown> | undefined
+    if (!row?.api_key) return res.status(400).json({ error: 'No active LLM config. Go to Settings to add one.' })
+
+    const config: LLMConfig = {
+      id: row.id as string, name: row.name as string, provider: row.provider as LLMConfig['provider'],
+      apiKey: row.api_key as string, baseUrl: (row.base_url as string) || null,
+      modelName: row.model_name as string, maxTokens: row.max_tokens as number || 8192,
+      temperature: row.temperature as number || 0.7,
+      enableThinking: (row.enable_thinking as number) !== 0,
+      isDefault: (row.is_default as number) === 1, isActive: (row.is_active as number) === 1,
+      createdAt: row.created_at as string || '', updatedAt: row.updated_at as string || ''
+    }
+
+    try {
+      const llm = createLLMProvider(config)
+      const decomposer = createDecomposer(llm)
+
+      // Get all agents with their specs and interfaces
+      const agents = db.prepare('SELECT id, name, description, spec_json, interface_json FROM agents WHERE project_id=?').all(projectId) as Record<string,unknown>[]
+      if (agents.length < 2) return res.json({ relationships: [], created: 0, message: 'Need at least 2 agents to analyze relationships' })
+
+      const agentSpecs: Array<{
+        id: string; name: string; description: string
+        inputs: Array<{ name: string; type: string; source: string }>
+        outputs: Array<{ name: string; type: string; destination: string }>
+      }> = agents.map(a => {
+        const spec = (() => { try { return JSON.parse((a.spec_json as string) || '{}') } catch { return {} } })()
+        const iface = (() => { try { return JSON.parse((a.interface_json as string) || '{}') } catch { return {} } })()
+        return {
+          id: a.id as string,
+          name: a.name as string,
+          description: (a.description as string) || '',
+          inputs: (iface.inputs || []).map((i: Record<string,unknown>) => ({ name: i.name as string, type: i.type as string, source: String(i.source) })),
+          outputs: (iface.outputs || []).map((o: Record<string,unknown>) => ({ name: o.name as string, type: o.type as string, destination: String(o.destination) })),
+        }
+      })
+
+      const rules = (project.rules as string) || ''
+      const result = await decomposer.mapRelationships(agentSpecs, rules, [])
+
+      // Collect active skills for relationship guidance
+      const activeSkills = db.prepare('SELECT prompt_content FROM skills WHERE is_active=1').all() as Array<{ prompt_content: string }>
+      const skillsCtx = activeSkills.length > 0 ? activeSkills.map(s => s.prompt_content).join('\n\n') : ''
+
+      // Build a richer prompt if skills are available
+      let enrichedResult = result
+      if (skillsCtx) {
+        const relPrompt = `CRITICAL: Analyze these agents and ALL possible relationships:\n${JSON.stringify(agentSpecs)}\n\nUse these relationship types:\n- depends_on: one agent requires another to START (dependency)\n- communicates_with: agents exchange data at runtime\n- shares_data: agents read/write shared data store\n\n${skillsCtx}\n\nOutput JSON:\n{"relationships":[{"sourceId":"id","targetId":"id","type":"depends_on","dataFlow":"what flows"}],"generationOrder":["id1"]}`
+        try {
+          enrichedResult = await llm.json<{ relationships: { sourceId: string; targetId: string; type: string; dataFlow: string }[]; generationOrder: string[] }>([
+            { role: 'system', content: 'You analyze microservice agent relationships. Only output valid JSON.' },
+            { role: 'user', content: relPrompt }
+          ])
+        } catch { /* use basic result */ }
+      }
+
+      // Save relationships to DB
+      let created = 0
+      const createdRels: Record<string,unknown>[] = []
+      for (const rel of enrichedResult.relationships || []) {
+        const srcAgent = agents.find(a => a.id === rel.sourceId || a.name === rel.sourceId)
+        const tgtAgent = agents.find(a => a.id === rel.targetId || a.name === rel.targetId)
+        if (!srcAgent || !tgtAgent || srcAgent.id === tgtAgent.id) continue
+        const type = rel.type || 'depends_on'
+        if (!['depends_on', 'communicates_with', 'shares_data'].includes(type)) continue
+        try {
+          const rid = rnd()
+          db.prepare('INSERT INTO agent_relationships (id,source_agent_id,target_agent_id,relationship_type,description,created_at) VALUES (?,?,?,?,?,?)')
+            .run(rid, srcAgent.id as string, tgtAgent.id as string, type, (rel.dataFlow as string) || '', now())
+          const saved = db.prepare('SELECT * FROM agent_relationships WHERE id=?').get(rid)
+          createdRels.push(saved as Record<string,unknown>)
+          created++
+        } catch { /* dup — skip */ }
+      }
+      saveDB()
+      if (created > 0) broadcast('project:relationships-updated', { projectId, count: created })
+      res.json({ relationships: createdRels, created, generationOrder: enrichedResult.generationOrder || [] })
+    } catch (e) {
+      res.status(500).json({ error: 'Relationship analysis failed: ' + (e as Error).message })
+    }
   })
 
   // ========================================

@@ -1,7 +1,7 @@
 {
-  "name": "dd-platform-generator-worker",
+  "name": "openblueprint-generator-worker",
   "version": "0.1.0",
-  "description": "DD Platform - Generator Worker (isolated child process for agent code generation)",
+  "description": "OpenBlueprint - Generator Worker (isolated child process for agent code generation)",
   "private": true,
   "main": "./index.js",
   "type": "commonjs",

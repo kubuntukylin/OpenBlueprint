@@ -71,7 +71,7 @@ It exposes REST API endpoints and communicates with other agents via HTTP.
 It does NOT need HTML or browser-facing UI — it returns JSON.`
   }
 
-  const prompt = `You are generating the complete source code for a microservice agent in the DD Platform.
+  const prompt = `You are generating the complete source code for a microservice agent in OpenBlueprint.
 
 ## AGENT DEFINITION
 Name: ${agentName}

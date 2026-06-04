@@ -80,13 +80,13 @@ export default function App() {
             ))}
           </div>
 
-          {/* Content */}
+          {/* Content — panels stay mounted, visibility controlled by CSS to preserve state */}
           <div className="flex-1 min-h-0">
-            {activeTab === 'chat' && <div className="h-full"><ChatPanel /></div>}
-            {activeTab === 'skills' && <div className="h-full"><SkillsPanel /></div>}
-            {activeTab === 'agents' && <div className="h-full"><AgentGraph /></div>}
-            {activeTab === 'process' && <div className="h-full"><ProcessPanel /></div>}
-            {activeTab === 'help' && <div className="h-full"><HelpPanel /></div>}
+            <div className={activeTab === 'chat' ? 'h-full' : 'hidden'}><ChatPanel /></div>
+            <div className={activeTab === 'skills' ? 'h-full' : 'hidden'}><SkillsPanel /></div>
+            <div className={activeTab === 'agents' ? 'h-full' : 'hidden'}><AgentGraph /></div>
+            <div className={activeTab === 'process' ? 'h-full' : 'hidden'}><ProcessPanel /></div>
+            <div className={activeTab === 'help' ? 'h-full' : 'hidden'}><HelpPanel /></div>
           </div>
         </div>
       </div>

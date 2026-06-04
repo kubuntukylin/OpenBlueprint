@@ -71,7 +71,7 @@ docker build -t node-local .  # 如果 CACHED 则无需重新下载
   {
     id: 'port-conflict-3001',
     category: 'deployment',
-    title: '容器端口与 DD Platform 后端冲突',
+    title: '容器端口与 OpenBlueprint 后端冲突',
     content: `## 问题
 docker-compose up 时报错：
 \`\`\`
@@ -79,13 +79,13 @@ Error: exposing port TCP 0.0.0.0:3001: bind: Only one usage of each socket addre
 \`\`\`
 
 ## 根因
-DD Platform 后端运行在 3001 端口。docker-compose.yml 的端口映射从 3000 起顺序分配（3000, 3001, 3002...），第二个 agent 就会占用 3001，与后端冲突。
+OpenBlueprint 后端运行在 3001 端口。docker-compose.yml 的端口映射从 3000 起顺序分配（3000, 3001, 3002...），第二个 agent 就会占用 3001，与后端冲突。
 
 ## 解决方案
 **容器端口从 4000 起分配**（已在代码中修复）。
 
 端口规划：
-- 3000-3999：保留给开发工具（DD Platform 后端 3001，前端 5173）
+- 3000-3999：保留给开发工具（OpenBlueprint 后端 3001，前端 5173）
 - 4000-4999：Agent 容器（支持 1000 个 agent）
 - 5000+：其他服务
 
@@ -182,7 +182,7 @@ Docker Hub (registry-1.docker.io) 在国内访问极慢或完全不通。
 | 腾讯云 | mirror.ccs.tencentyun.com | 需要账号 | ❌ 需认证 |
 
 ## 解决方案
-**不用第三方镜像源**。DD Platform 使用自建的 \`node-local\` 基础镜像：
+**不用第三方镜像源**。OpenBlueprint 使用自建的 \`node-local\` 基础镜像：
 \`\`\`dockerfile
 FROM alpine:latest
 RUN apk add --no-cache nodejs npm

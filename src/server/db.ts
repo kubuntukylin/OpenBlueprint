@@ -12,9 +12,9 @@ let dbPath: string | null = null
 // ---- Path ----
 function getDbPath(): string {
   const home = process.env.APPDATA || process.env.HOME || process.env.USERPROFILE || '.'
-  const dir = join(home, 'DD Platform')
+  const dir = join(home, 'OpenBlueprint')
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  return join(dir, 'dd-platform.db')
+  return join(dir, 'openblueprint.db')
 }
 
 // ---- Wrapper ----
@@ -198,6 +198,19 @@ function runMigrations(database: DB) {
     // FTS for full-text search
     try { database.exec('CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(content, content_rowid=rowid)') } catch { /* FTS may fail in some sql.js builds */ }
     database.prepare("INSERT INTO _migrations (version,name,applied_at) VALUES (7,?,?)").run('code_chunks', now())
+  }
+
+  // V8: Agent relationship skills + relationship management
+  if (!applied.has(8)) {
+    const relSkills = [
+      { id: 'skill-agent-relationships', name: 'Agent Relationship Types', category: 'architecture', desc: 'Define dependency, communication, and data-sharing relationships between agents', prompt: 'CRITICAL: After creating ALL agents in a project, define their relationships:\n- depends_on: Agent A needs Agent B to be running first (build-time dependency). Use this when A calls B\'s API at startup.\n- communicates_with: Two agents exchange data at runtime. Use this for request/response interactions.\n- shares_data: Two agents read/write the same data store. Use this for database sharing or event streaming.\n\nFor EVERY pair of agents that interact, create a relationship. Start by analyzing each agent\'s inputs/outputs to map dependencies.' },
+      { id: 'skill-service-deps', name: 'Service Dependency Declaration', category: 'architecture', desc: 'Always declare inter-agent dependencies when creating agents', prompt: 'When creating agents, ALWAYS declare dependencies via the dependencies field. If Agent A calls Agent B\'s API, list B\'s ID in A\'s dependencies. This ensures:\n1. Correct build order (B builds before A)\n2. Environment variables (B_URL=http://b:3000 is injected into A)\n3. Docker Compose depends_on ordering\n\nBefore creating an agent, review other agents\' outputs to identify what this agent needs as input.' },
+    ]
+    for (const s of relSkills) {
+      database.prepare('INSERT INTO skills (id,name,description,category,prompt_content,is_active,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,1,?,?,?)')
+        .run(s.id, s.name, s.desc, s.category, s.prompt, 10 + relSkills.indexOf(s), now(), now())
+    }
+    database.prepare("INSERT INTO _migrations (version,name,applied_at) VALUES (8,?,?)").run('agent_relationship_skills', now())
   }
 }
 

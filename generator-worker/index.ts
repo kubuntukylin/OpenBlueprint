@@ -102,7 +102,14 @@ If web frontend, also create:
 - Use TypeScript. No plain JavaScript.
 - Listen on process.env.PORT || 3000 (or 8080 for frontends)
 - Output COMPLETE, runnable code — no placeholders, no "// TODO"
-- NO explanatory text between files — only the FILE: blocks`
+- NO explanatory text between files — only the FILE: blocks
+
+## TESTING REQUIREMENTS
+After all source files, you MUST also create test files:
+1. Create a FILE: src/__tests__/health.test.ts that tests the /health endpoint
+2. Use vitest: import { describe, it, expect } from 'vitest'
+3. For Express agents, test that routes return correct status codes
+4. Export the app (without listening) from index.ts for testability`
 
   const client = new OpenAI({
     apiKey: llmConfig.apiKey as string,
@@ -217,12 +224,25 @@ If web frontend, also create:
     const startCmd = hasReact ? 'npx vite --host 0.0.0.0' : 'npx tsx index.ts'
     const pkgJson = JSON.stringify({
       name: sanitizedName, version: '1.0.0', private: true,
-      scripts: { start: startCmd, build: 'npx tsc --noEmit' },
-      dependencies: baseDeps
+      scripts: { start: startCmd, build: 'npx tsc --noEmit', test: 'npx vitest run', 'test:watch': 'npx vitest' },
+      dependencies: baseDeps,
+      devDependencies: { vitest: '^4.0.0' }
     }, null, 2)
     const dockerfile = `FROM node-local\nWORKDIR /app\nCOPY package.json .\nRUN npm install --registry=https://registry.npmmirror.com\nCOPY . .\nEXPOSE ${isWebFrontend ? '8080' : '3000'}\nCMD ["npx", "tsx", "index.ts"]`
+    const vitestConfig = `import { defineConfig } from 'vitest/config'
+export default defineConfig({
+  test: {
+    globals: true,
+    environment: 'node',
+    include: ['src/**/*.test.ts', 'src/**/*.spec.ts'],
+    testTimeout: 10_000,
+    reporters: ['verbose', 'json'],
+    outputFile: '.vitest-report.json'
+  }
+})
+`
 
-    for (const [name, content] of [['package.json', pkgJson], ['Dockerfile', dockerfile]] as [string, string][]) {
+    for (const [name, content] of [['package.json', pkgJson], ['vitest.config.ts', vitestConfig], ['Dockerfile', dockerfile]] as [string, string][]) {
       const fp = join(agentDir, name)
       writeFileSync(fp, content, 'utf-8')
       allFiles.push(name)

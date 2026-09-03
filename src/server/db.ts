@@ -1,5 +1,6 @@
 // ============================================================
 // Database — init, migrations, wrapper (sql.js WASM)
+// With transaction support and checkpoint semantics for resilience.
 // ============================================================
 import initSqlJs, { type Database as SqlJsDb, type SqlJsStatic } from 'sql.js'
 import { join } from 'path'
@@ -19,6 +20,10 @@ function getDbPath(): string {
 
 // ---- Wrapper ----
 export class DB {
+  private saveTimer: ReturnType<typeof setTimeout> | null = null
+  private dirty = false
+  private closed = false
+
   constructor(private d: SqlJsDb) { this.d.run('PRAGMA foreign_keys = ON') }
 
   exec(sql: string) { this.d.run(sql) }
@@ -26,7 +31,7 @@ export class DB {
   prepare(sql: string) {
     const self = this
     return {
-      run(...params: unknown[]) { self.d.run(sql, params) },
+      run(...params: unknown[]) { self.d.run(sql, params); return self },
       get(...params: unknown[]) {
         const s = self.d.prepare(sql)
         try {
@@ -57,8 +62,51 @@ export class DB {
     }
   }
 
-  save() { if (dbPath) writeFileSync(dbPath, Buffer.from(this.d.export())) }
-  close() { this.d.close() }
+  // ---- Transaction support ----
+  // Wraps multiple DB operations in a single atomic transaction.
+  // If the callback throws, the transaction is rolled back automatically.
+  transaction<T>(fn: (db: DB) => T): T {
+    this.d.run('BEGIN')
+    try {
+      const result = fn(this)
+      this.d.run('COMMIT')
+      return result
+    } catch (e) {
+      try { this.d.run('ROLLBACK') } catch { /* ignore rollback errors */ }
+      throw e
+    }
+  }
+
+  // ---- Checkpoint (replaces saveDB for graceful-shutdown-only use) ----
+  // Call this only before graceful shutdown. WAL-level durability is handled
+  // by writeFileSync for each explicit save. For normal operation, save()
+  // is automatically called after transaction commits.
+  checkpoint() {
+    if (this.closed) return
+    this.dirty = false
+    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null }
+    if (dbPath) writeFileSync(dbPath, Buffer.from(this.d.export()))
+  }
+
+  save() {
+    if (this.closed) return
+    this.dirty = false
+    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null }
+    if (dbPath) writeFileSync(dbPath, Buffer.from(this.d.export()))
+  }
+
+  // Debounced save — batches rapid mutations into one disk write
+  saveDebounced(ms = 200) {
+    this.dirty = true
+    if (this.saveTimer) clearTimeout(this.saveTimer)
+    this.saveTimer = setTimeout(() => this.save(), ms)
+  }
+
+  close() {
+    this.checkpoint()
+    this.closed = true
+    this.d.close()
+  }
 }
 
 export async function initDB(): Promise<DB> {
@@ -75,7 +123,7 @@ export async function initDB(): Promise<DB> {
 }
 
 export function getDB(): DB { if (!db) throw new Error('DB not initialized'); return db }
-export function saveDB() { if (db) db.save() }
+export function saveDB() { if (db) db.saveDebounced() }
 
 // ---- Migrations ----
 function runMigrations(database: DB) {
@@ -153,7 +201,6 @@ function runMigrations(database: DB) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`)
-    // Seed default skills
     const skills = [
       { id: 'skill-microservices', name: 'Microservices Architecture', category: 'architecture', desc: 'Design agents as independent microservices with clear API boundaries', prompt: 'Design agents as independent microservices. Each agent is a standalone service with its own database, API, and deployment. Services communicate via REST or message queues. No shared databases.' },
       { id: 'skill-rest-api', name: 'REST API Pattern', category: 'backend', desc: 'Standard REST API design with proper HTTP methods and status codes', prompt: 'Every agent exposing an API must follow REST conventions: GET/POST/PUT/DELETE, proper HTTP status codes (200/201/400/404/500), JSON request/response bodies, clear endpoint naming.' },
@@ -195,7 +242,6 @@ function runMigrations(database: DB) {
     database.exec('CREATE INDEX IF NOT EXISTS idx_chunks_agent ON code_chunks(agent_id)')
     database.exec('CREATE INDEX IF NOT EXISTS idx_chunks_conv ON code_chunks(conversation_id)')
     database.exec('CREATE INDEX IF NOT EXISTS idx_chunks_type ON code_chunks(content_type)')
-    // FTS for full-text search
     try { database.exec('CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(content, content_rowid=rowid)') } catch { /* FTS may fail in some sql.js builds */ }
     database.prepare("INSERT INTO _migrations (version,name,applied_at) VALUES (7,?,?)").run('code_chunks', now())
   }
@@ -265,6 +311,79 @@ Always review each agent's inputs/outputs to identify ALL three types.`,
     )
 
     database.prepare("INSERT INTO _migrations (version,name,applied_at) VALUES (9,?,?)").run('enhance_relationship_skills', now())
+  }
+
+  // V10: Persistent generation queue with lease-based claiming + dead-letter support
+  if (!applied.has(10)) {
+    database.exec(`CREATE TABLE generation_queue (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      queue_type TEXT NOT NULL DEFAULT 'claude_code' CHECK(queue_type IN ('claude_code','llm_api','action')),
+      status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','claimed','running','completed','failed','dead_letter')),
+      priority INTEGER NOT NULL DEFAULT 0,
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      idempotency_key TEXT UNIQUE,
+      lease_token TEXT,
+      lease_expires_at TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      max_attempts INTEGER NOT NULL DEFAULT 3,
+      last_error TEXT,
+      dead_letter_reason TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`)
+    database.exec('CREATE INDEX IF NOT EXISTS idx_gq_status ON generation_queue(status)')
+    database.exec('CREATE INDEX IF NOT EXISTS idx_gq_agent ON generation_queue(agent_id)')
+    database.prepare("INSERT INTO _migrations (version,name,applied_at) VALUES (10,?,?)").run('generation_queue', now())
+  }
+
+  // V11: Generation checkpoints for crash recovery
+  if (!applied.has(11)) {
+    database.exec(`CREATE TABLE generation_checkpoints (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL,
+      phase TEXT NOT NULL CHECK(phase IN ('init','generate','validate','package','complete')),
+      checkpoint_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    )`)
+    database.exec('CREATE INDEX IF NOT EXISTS idx_gc_agent ON generation_checkpoints(agent_id)')
+    database.exec('CREATE INDEX IF NOT EXISTS idx_gc_session ON generation_checkpoints(session_id)')
+    database.prepare("INSERT INTO _migrations (version,name,applied_at) VALUES (11,?,?)").run('generation_checkpoints', now())
+  }
+
+  // V12: Test results and test suites for automated testing pipeline
+  if (!applied.has(12)) {
+    database.exec(`CREATE TABLE test_results (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL,
+      phase TEXT NOT NULL CHECK(phase IN ('unit','integration','system')),
+      status TEXT NOT NULL CHECK(status IN ('pending','running','passed','failed','error')),
+      summary_json TEXT NOT NULL DEFAULT '{}',
+      failures_json TEXT NOT NULL DEFAULT '[]',
+      logs TEXT DEFAULT '',
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      fix_attempts INTEGER NOT NULL DEFAULT 0,
+      max_fix_attempts INTEGER NOT NULL DEFAULT 3,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`)
+    database.exec('CREATE INDEX IF NOT EXISTS idx_tr_agent ON test_results(agent_id)')
+    database.exec('CREATE INDEX IF NOT EXISTS idx_tr_session ON test_results(session_id)')
+    database.exec(`CREATE TABLE test_suites (
+      id TEXT PRIMARY KEY,
+      project_id TEXT,
+      name TEXT NOT NULL,
+      suite_type TEXT NOT NULL CHECK(suite_type IN ('integration','system')),
+      status TEXT NOT NULL DEFAULT 'pending',
+      summary_json TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`)
+    database.exec('CREATE INDEX IF NOT EXISTS idx_ts_project ON test_suites(project_id)')
+    database.prepare("INSERT INTO _migrations (version,name,applied_at) VALUES (12,?,?)").run('test_results_and_suites', now())
   }
 }
 

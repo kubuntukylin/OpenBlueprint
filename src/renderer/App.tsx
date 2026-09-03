@@ -9,12 +9,15 @@ import HelpPanel from './HelpPanel'
 import SkillsPanel from './SkillsPanel'
 import SettingsPanel from './SettingsPanel'
 import StatusBar from './StatusBar'
+import ToastContainer from './Toast'
+import TestPanel from './TestPanel'
 
 const tabs = [
   { id: 'chat' as const, label: 'Chat', icon: '💬' },
   { id: 'skills' as const, label: 'Skills', icon: '📋' },
   { id: 'agents' as const, label: 'Agents', icon: '🔗' },
   { id: 'process' as const, label: 'Process', icon: '⚡' },
+  { id: 'tests' as const, label: 'Tests', icon: '🧪' },
   { id: 'help' as const, label: 'Help', icon: '📖' },
 ]
 
@@ -86,12 +89,14 @@ export default function App() {
             <div className={activeTab === 'skills' ? 'h-full' : 'hidden'}><SkillsPanel /></div>
             <div className={activeTab === 'agents' ? 'h-full' : 'hidden'}><AgentGraph /></div>
             <div className={activeTab === 'process' ? 'h-full' : 'hidden'}><ProcessPanel /></div>
+            <div className={activeTab === 'tests' ? 'h-full' : 'hidden'}><TestPanel /></div>
             <div className={activeTab === 'help' ? 'h-full' : 'hidden'}><HelpPanel /></div>
           </div>
         </div>
       </div>
       <StatusBar />
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      <ToastContainer />
     </div>
   )
 }

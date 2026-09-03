@@ -6,6 +6,9 @@ const BASE = 'http://localhost:3001'
 type EventFn = (data: unknown) => void
 const listeners = new Map<string, Set<EventFn>>()
 let ws: WebSocket | null = null
+let wsReconnectAttempts = 0
+const WS_MAX_RECONNECT = 10
+export let wsConnected = false
 
 // Convert snake_case keys to camelCase recursively
 function camelKeys(obj: unknown): unknown {
@@ -27,6 +30,8 @@ function connectWS() {
   try {
     ws = new WebSocket('ws://localhost:3001/ws')
     ws.onopen = () => {
+      wsReconnectAttempts = 0
+      wsConnected = true
       listeners.get('ws:connected')?.forEach(fn => fn({}))
     }
     ws.onmessage = (e) => {
@@ -35,9 +40,18 @@ function connectWS() {
         listeners.get(type)?.forEach(fn => fn(camelKeys(payload)))
       } catch { /* ignore */ }
     }
-    ws.onclose = () => { setTimeout(connectWS, 3000) }
+    ws.onclose = () => {
+      wsConnected = false
+      listeners.get('ws:disconnected')?.forEach(fn => fn({}))
+      if (wsReconnectAttempts < WS_MAX_RECONNECT) {
+        const delay = Math.min(1000 * Math.pow(2, wsReconnectAttempts), 30_000)
+        const jitter = delay * (0.8 + Math.random() * 0.4)
+        wsReconnectAttempts++
+        setTimeout(connectWS, jitter)
+      }
+    }
     ws.onerror = () => ws?.close()
-  } catch { setTimeout(connectWS, 3000) }
+  } catch { setTimeout(connectWS, 1000) }
 }
 connectWS()
 
@@ -107,6 +121,14 @@ export const api = {
   // ---- Shell ----
   shell: {
     exec: (cwd: string, command: string) => req('/api/shell/exec', { method: 'POST', body: JSON.stringify({ cwd, command }) }),
+  },
+
+  // ---- Tests ----
+  tests: {
+    results: (agentId: string) => req<Record<string,unknown>[]>('/api/agents/' + agentId + '/test-results'),
+    retry: (agentId: string) => req<{ sessionId: string }>('/api/agents/' + agentId + '/retry-tests', { method: 'POST' }),
+    suites: (projectId: string) => req<Record<string,unknown>[]>('/api/projects/' + projectId + '/test-suites'),
+    runIntegration: (projectId: string) => req<Record<string,unknown>>('/api/projects/' + projectId + '/run-integration-tests', { method: 'POST' }),
   },
 
   // ---- System ----

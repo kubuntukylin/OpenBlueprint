@@ -1,7 +1,7 @@
 import React, { useMemo, useCallback, useEffect } from 'react'
 import { ReactFlow, Background, Controls, MiniMap, useNodesState, useEdgesState, type Node, MarkerType } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { useAgentStore, useProjectStore, useUIStore, useGenerationStore } from './stores'
+import { useAgentStore, useProjectStore, useUIStore, useGenerationStore, useNotificationStore } from './stores'
 import { api } from './api'
 import Editor from '@monaco-editor/react'
 import { AGENT_STATUS_COLORS, EDGE_COLORS } from '../shared/types'
@@ -260,7 +260,7 @@ function AgentDetail({ agent, onClose }: { agent: import('../shared/types').Agen
                         <button onClick={async () => {
                           setSavingFile(true)
                           try { await api.put('/api/files', { path: viewingFile, content: editedContent }); setFileContent(editedContent); setEditingFile(false) }
-                          catch { alert('Save failed') }
+                          catch { useNotificationStore.getState().addToast({ type: 'error', message: 'Save failed', duration: 5000 }) }
                           finally { setSavingFile(false) }
                         }} disabled={savingFile} className="px-2 py-0.5 text-[10px] bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded">Save</button>
                         <button onClick={() => { setEditingFile(false); setEditedContent(fileContent) }} className="px-2 py-0.5 text-[10px] bg-gray-700 hover:bg-gray-600 text-gray-300 rounded">Cancel</button>
@@ -326,15 +326,15 @@ function AgentDetail({ agent, onClose }: { agent: import('../shared/types').Agen
           <AddFeature agent={agent} />
           {edit ? (
             <div className="flex gap-2">
-              <button onClick={async () => { setSaving(true); try { const u = await api.agents.update(agent.id, { name: ename, description: edesc }); updateAgent(agent.id, u as never); setEdit(false) } catch (e) { alert('Failed: ' + (e as Error).message) } finally { setSaving(false) } }} disabled={saving} className="flex-1 px-3 py-1.5 bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white rounded-lg text-sm font-medium">{saving ? 'Saving...' : 'Save'}</button>
+              <button onClick={async () => { setSaving(true); try { const u = await api.agents.update(agent.id, { name: ename, description: edesc }); updateAgent(agent.id, u as never); setEdit(false) } catch (e) { useNotificationStore.getState().addToast({ type: 'error', message: 'Failed: ' + (e as Error).message, duration: 6000 }) } finally { setSaving(false) } }} disabled={saving} className="flex-1 px-3 py-1.5 bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white rounded-lg text-sm font-medium">{saving ? 'Saving...' : 'Save'}</button>
               <button onClick={() => { setEdit(false); setEName(agent.name); setEDesc(agent.description) }} className="flex-1 px-3 py-1.5 bg-[#2d3348] hover:bg-[#3d4568] text-gray-300 rounded-lg text-sm">Cancel</button>
             </div>
           ) : (
             <button onClick={() => setEdit(true)} className="w-full px-3 py-1.5 bg-[#2d3348] hover:bg-[#3d4568] text-gray-300 rounded-lg text-sm">Edit Agent</button>
           )}
-          <button onClick={async () => { if (!confirm(`Regenerate "${agent.name}"? Other agents are not affected.`)) return; setRegenerating(true); try { const u = await api.agents.regenerate(agent.id); updateAgent(agent.id, u as never) } catch (e) { alert('Failed: ' + (e as Error).message) } finally { setRegenerating(false) } }} disabled={regenerating} className="w-full px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-lg text-sm border border-blue-500/20 disabled:opacity-50">{regenerating ? 'Regenerating...' : 'Regenerate (API)'}</button>
-          <button onClick={async () => { if (!confirm(`Generate "${agent.name}" with Claude Code? Full process visibility in Process tab.`)) return; setRegenerating(true); useUIStore.getState().setActiveTab('process'); try { const u = await api.agents.generateClaude(agent.id); updateAgent(agent.id, u as never) } catch (e) { alert('Failed: ' + (e as Error).message) } finally { setRegenerating(false) } }} disabled={regenerating} className="w-full px-3 py-1.5 bg-green-500/10 hover:bg-green-500/20 text-green-400 rounded-lg text-sm border border-green-500/20 disabled:opacity-50">{regenerating ? 'Generating...' : 'Claude Code Generate'}</button>
-          <button onClick={async () => { if (!confirm(`Delete "${agent.name}"?`)) return; try { await api.agents.del(agent.id); removeAgent(agent.id); onClose() } catch (e) { alert('Failed: ' + (e as Error).message) } }} className="w-full px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg text-sm border border-red-500/20">Delete Agent</button>
+          <button onClick={async () => { if (!confirm(`Regenerate "${agent.name}"? Other agents are not affected.`)) return; setRegenerating(true); try { const u = await api.agents.regenerate(agent.id); updateAgent(agent.id, u as never) } catch (e) { useNotificationStore.getState().addToast({ type: 'error', message: 'Failed: ' + (e as Error).message, duration: 6000 }) } finally { setRegenerating(false) } }} disabled={regenerating} className="w-full px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-lg text-sm border border-blue-500/20 disabled:opacity-50">{regenerating ? 'Regenerating...' : 'Regenerate (API)'}</button>
+          <button onClick={async () => { if (!confirm(`Generate "${agent.name}" with Claude Code? Full process visibility in Process tab.`)) return; setRegenerating(true); useUIStore.getState().setActiveTab('process'); try { const u = await api.agents.generateClaude(agent.id); updateAgent(agent.id, u as never) } catch (e) { useNotificationStore.getState().addToast({ type: 'error', message: 'Failed: ' + (e as Error).message, duration: 6000 }) } finally { setRegenerating(false) } }} disabled={regenerating} className="w-full px-3 py-1.5 bg-green-500/10 hover:bg-green-500/20 text-green-400 rounded-lg text-sm border border-green-500/20 disabled:opacity-50">{regenerating ? 'Generating...' : 'Claude Code Generate'}</button>
+          <button onClick={async () => { if (!confirm(`Delete "${agent.name}"?`)) return; try { await api.agents.del(agent.id); removeAgent(agent.id); onClose() } catch (e) { useNotificationStore.getState().addToast({ type: 'error', message: 'Failed: ' + (e as Error).message, duration: 6000 }) } }} className="w-full px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg text-sm border border-red-500/20">Delete Agent</button>
         </div>
       </div>
     </div>
@@ -361,7 +361,7 @@ function AddFeature({ agent }: { agent: import('../shared/types').Agent }) {
         useUIStore.getState().setActiveTab('chat')
       }
       setText('')
-    } catch (e) { alert('Failed: ' + (e as Error).message) } finally { setSending(false) }
+    } catch (e) { useNotificationStore.getState().addToast({ type: 'error', message: 'Failed: ' + (e as Error).message, duration: 6000 }) } finally { setSending(false) }
   }
   return (
     <div className="space-y-1.5">

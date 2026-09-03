@@ -8,7 +8,7 @@ import { randomUUID } from 'crypto'
 import type { WebSocket } from 'ws'
 import { getDB, saveDB } from './db'
 import { createLLMProvider, createDecomposer } from './llm'
-import { startGeneration, generateAllAgents, startGenerationClaude, startClaudeCodeAction } from './generator'
+import { startGeneration, generateAllAgents, startGenerationClaude, startClaudeCodeAction, isShuttingDown } from './generator'
 import { rememberMessage, getRecentContext } from './memory'
 import { indexMessage, retrieveContext } from './rag'
 import type { LLMConfig } from '../shared/types'
@@ -53,7 +53,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
     db.prepare('INSERT INTO projects (id,name,description,rules,output_path,status,mode,parent_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
       .run(id, name, description || '', rules || '', outputPath || 'output', 'idle', projectMode, parentId || null, t, t)
     const p = db.prepare('SELECT * FROM projects WHERE id=?').get(id)
-    saveDB(); res.json(p)
+    db.saveDebounced(); res.json(p)
   })
 
   app.get('/api/projects', (_req, res) => {
@@ -73,7 +73,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
       const vals = cols.map(c => req.body[c])
       db.prepare(`UPDATE projects SET ${sets}, updated_at=? WHERE id=?`).run(...vals, now(), req.params.id)
     }
-    res.json(db.prepare('SELECT * FROM projects WHERE id=?').get(req.params.id)); saveDB()
+    res.json(db.prepare('SELECT * FROM projects WHERE id=?').get(req.params.id)); db.saveDebounced()
   })
 
   app.delete('/api/projects/:id', (req, res) => {
@@ -123,7 +123,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
     db.prepare('DELETE FROM projects WHERE id=?').run(req.params.id)
     // Clean up any remaining orphaned relationships
     db.prepare("DELETE FROM agent_relationships WHERE source_agent_id NOT IN (SELECT id FROM agents) OR target_agent_id NOT IN (SELECT id FROM agents)").run()
-    saveDB()
+    db.saveDebounced()
     res.json({ success: true, deleted: { projects: allProjectIds.length, agents: allAgents.length, conversations: convCount as number, relationships: relCount as number } })
   })
 
@@ -154,7 +154,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
       db.prepare('UPDATE agents SET description=COALESCE(?,description), spec_json=COALESCE(?,spec_json), interface_json=COALESCE(?,interface_json), updated_at=? WHERE id=?')
         .run(description || null, specJson ? stringify(specJson) : null, interfaceJson ? stringify(interfaceJson) : null, t, existing.id)
       const updated = db.prepare('SELECT * FROM agents WHERE id=?').get(existing.id)
-      saveDB()
+      db.saveDebounced()
       broadcast('agent:updated', { agent: updated })
       return res.json(updated)
     }
@@ -176,7 +176,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
     if (Array.isArray(sharesData)) createRels(sharesData, 'shares_data')
 
     const agent = db.prepare('SELECT * FROM agents WHERE id=?').get(id)
-    saveDB()
+    db.saveDebounced()
     broadcast('agent:created', { agent })
     res.json(agent)
   })
@@ -216,7 +216,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
     updateRels(req.body.dependencies, 'depends_on')
     updateRels(req.body.communicatesWith, 'communicates_with')
     updateRels(req.body.sharesData, 'shares_data')
-    res.json(db.prepare('SELECT * FROM agents WHERE id=?').get(req.params.id)); saveDB()
+    res.json(db.prepare('SELECT * FROM agents WHERE id=?').get(req.params.id)); db.saveDebounced()
   })
 
   app.post('/api/agents/:id/generate-claude', (req, res) => {
@@ -229,7 +229,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
     const attempts = ((agent.generation_attempts as number) || 0) + 1
     db.prepare("UPDATE agents SET status='queued', generation_attempts=?, error_message=NULL, updated_at=? WHERE id=?")
       .run(attempts, now(), req.params.id)
-    saveDB()
+    db.saveDebounced()
     const updatedClaude = db.prepare('SELECT * FROM agents WHERE id=?').get(req.params.id)
     broadcast('agent:updated', { agent: updatedClaude })
     const proj = agent.project_id
@@ -250,7 +250,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
     const attempts = ((agent.generation_attempts as number) || 0) + 1
     db.prepare("UPDATE agents SET status='queued', generation_attempts=?, error_message=NULL, updated_at=? WHERE id=?")
       .run(attempts, now(), req.params.id)
-    saveDB()
+    db.saveDebounced()
     const updatedRegen = db.prepare('SELECT * FROM agents WHERE id=?').get(req.params.id)
     broadcast('agent:updated', { agent: updatedRegen })
     const proj = agent.project_id
@@ -341,7 +341,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
 
   app.delete('/api/agents/:id', (req, res) => {
     db.prepare('DELETE FROM agents WHERE id=?').run(req.params.id)
-    saveDB(); res.json({ success: true })
+    db.saveDebounced(); res.json({ success: true })
   })
 
   app.get('/api/relationships', (req, res) => {
@@ -363,7 +363,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
     try {
       db.prepare('INSERT INTO agent_relationships (id,source_agent_id,target_agent_id,relationship_type,description,created_at) VALUES (?,?,?,?,?,?)')
         .run(id, sourceAgentId, targetAgentId, type, description || '', now())
-      saveDB()
+      db.saveDebounced()
       const rel = db.prepare('SELECT id, source_agent_id as sourceAgentId, target_agent_id as targetAgentId, relationship_type as relationshipType, description, created_at as createdAt FROM agent_relationships WHERE id=?').get(id)
       broadcast('relationship:created', { relationship: rel })
       res.json(rel)
@@ -377,7 +377,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
     const rel = db.prepare('SELECT * FROM agent_relationships WHERE id=?').get(req.params.id)
     if (!rel) return res.status(404).json({ error: 'Relationship not found' })
     db.prepare('DELETE FROM agent_relationships WHERE id=?').run(req.params.id)
-    saveDB()
+    db.saveDebounced()
     broadcast('relationship:deleted', { relationshipId: req.params.id })
     res.json({ success: true })
   })
@@ -447,7 +447,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
           created++
         } catch { /* dup — skip */ }
       }
-      saveDB()
+      db.saveDebounced()
       if (created > 0) broadcast('project:relationships-updated', { projectId, count: created })
       res.json({ relationships: createdRels, created, generationOrder: result.generationOrder || [] })
     } catch (e) {
@@ -463,7 +463,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
     const id = rnd(); const t = now()
     db.prepare('INSERT INTO conversations (id,project_id,title,created_at,updated_at) VALUES (?,?,?,?,?)')
       .run(id, projectId || null, title || 'New Conversation', t, t)
-    res.json(db.prepare('SELECT * FROM conversations WHERE id=?').get(id)); saveDB()
+    res.json(db.prepare('SELECT * FROM conversations WHERE id=?').get(id)); db.saveDebounced()
   })
 
   app.get('/api/conversations', (_req, res) => {
@@ -472,7 +472,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
 
   app.delete('/api/conversations/:id', (req, res) => {
     db.prepare('DELETE FROM conversations WHERE id=?').run(req.params.id)
-    saveDB(); res.json({ success: true })
+    db.saveDebounced(); res.json({ success: true })
   })
 
   app.get('/api/conversations/:id/messages', (req, res) => {
@@ -502,7 +502,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
         ids.push(aid)
       }
     }
-    saveDB()
+    db.saveDebounced()
     if (ids.length > 0) {
       generateAllAgents(ids, cfg, (out?.output_path as string) || 'output', wssClients)
     }
@@ -524,7 +524,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
       db.prepare('INSERT INTO messages (id,conversation_id,role,content,sort_order,created_at) VALUES (?,?,?,?,?,?)')
         .run(userMsgId, convId, 'user', content, count + 1, now())
       db.prepare('UPDATE conversations SET message_count=message_count+1, updated_at=? WHERE id=?').run(now(), convId)
-      saveDB()
+      db.saveDebounced()
       broadcast('conversation:message-new', { conversationId: convId, message: db.prepare('SELECT * FROM messages WHERE id=?').get(userMsgId) })
 
       // 2. Get LLM config
@@ -564,7 +564,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
         if (n - lastFlush > 3000) {
           lastFlush = n
           db.prepare('UPDATE messages SET content=? WHERE id=?').run(streamContent, streamMsgId)
-          saveDB()
+          db.saveDebounced()
         }
       }
 
@@ -631,7 +631,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
         activeStreams.delete(convId)
         const finalMsg = db.prepare('SELECT * FROM messages WHERE id=?').get(streamMsgId)
         db.prepare('UPDATE conversations SET message_count=message_count+1, updated_at=? WHERE id=?').run(now(), convId)
-        saveDB()
+        db.saveDebounced()
         broadcast('chat:stream-done', { conversationId: convId, messageId: streamMsgId })
         res.json({ message: finalMsg, agents: [], relationships: [], projectId })
       } else {
@@ -656,7 +656,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
         activeStreams.delete(convId)
       }
       db.prepare('UPDATE messages SET content=? WHERE id=?').run(streamContent, streamMsgId)
-      saveDB()
+      db.saveDebounced()
       rememberMessage(convId, streamMsgId, streamContent, config.apiKey, config.baseUrl || 'https://api.deepseek.com/v1').catch(() => {})
       indexMessage(convId, streamMsgId, streamContent).catch(() => {})
       broadcast('chat:stream-done', { conversationId: convId, messageId: streamMsgId })
@@ -673,7 +673,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
       const cnt = (db.prepare('SELECT COUNT(*) as c FROM messages WHERE conversation_id=?').get(convId) as Record<string,unknown>).c as number || 0
       db.prepare('INSERT INTO messages (id,conversation_id,role,content,sort_order,created_at) VALUES (?,?,?,?,?,?)')
         .run(errId, convId, 'assistant', '❌ ' + msg, cnt + 1, now())
-      saveDB()
+      db.saveDebounced()
       res.status(500).json({ error: msg })
     }
   })
@@ -694,7 +694,7 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
     const id = rnd(); const t = now()
     db.prepare('INSERT INTO llm_configurations (id,name,provider,api_key,base_url,model_name,max_tokens,temperature,is_default,is_active,enable_thinking,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?)')
       .run(id, req.body.name, req.body.provider, req.body.apiKey || '', req.body.baseUrl || null, req.body.modelName, req.body.maxTokens || 8192, req.body.temperature ?? 0.7, req.body.isDefault ? 1 : 0, req.body.enableThinking !== false ? 1 : 0, t, t)
-    res.json(db.prepare('SELECT * FROM llm_configurations WHERE id=?').get(id)); saveDB()
+    res.json(db.prepare('SELECT * FROM llm_configurations WHERE id=?').get(id)); db.saveDebounced()
   })
 
   app.put('/api/llm-configs/:id', (req, res) => {
@@ -708,14 +708,14 @@ export function registerRoutes(app: Express, wssClients: Set<WebSocket>, onShutd
       const vals = cols.map(c => req.body[c])
       db.prepare(`UPDATE llm_configurations SET ${sets}, updated_at=? WHERE id=?`).run(...vals, now(), req.params.id)
     }
-    res.json(db.prepare('SELECT * FROM llm_configurations WHERE id=?').get(req.params.id)); saveDB()
+    res.json(db.prepare('SELECT * FROM llm_configurations WHERE id=?').get(req.params.id)); db.saveDebounced()
   })
 
   app.delete('/api/llm-configs/:id', (req, res) => {
     const exists = db.prepare('SELECT id FROM llm_configurations WHERE id=?').get(req.params.id)
     if (!exists) return res.status(404).json({ success: false, error: 'LLM config not found' })
     db.prepare('DELETE FROM llm_configurations WHERE id=?').run(req.params.id)
-    saveDB()
+    db.saveDebounced()
     res.json({ success: true })
   })
 
@@ -1003,7 +1003,7 @@ CMD ["npx", "tsx", "index.ts"]
     const id = rnd(); const t = now()
     db.prepare('INSERT INTO skills (id,name,description,category,prompt_content,is_active,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)')
       .run(id, name, description || '', category || 'general', content, isActive !== false ? 1 : 0, 99, t, t)
-    saveDB()
+    db.saveDebounced()
     res.json(db.prepare('SELECT * FROM skills WHERE id=?').get(id))
   })
 
@@ -1019,14 +1019,14 @@ CMD ["npx", "tsx", "index.ts"]
     if (sets.length > 0) {
       db.prepare(`UPDATE skills SET ${sets.join(',')}, updated_at=? WHERE id=?`).run(...vals, now(), req.params.id)
     }
-    saveDB()
+    db.saveDebounced()
     res.json(db.prepare('SELECT * FROM skills WHERE id=?').get(req.params.id))
   })
 
   app.delete('/api/skills/:id', (req, res) => {
     const result = db.prepare('DELETE FROM skills WHERE id=?').run(req.params.id)
     if (!result) return res.status(404).json({ success: false, error: 'Skill not found' })
-    saveDB()
+    db.saveDebounced()
     res.json({ success: true })
   })
 
@@ -1043,7 +1043,7 @@ CMD ["npx", "tsx", "index.ts"]
   app.put('/api/settings/:key', (req, res) => {
     db.prepare("INSERT INTO settings (key,value,category,updated_at) VALUES (?,?,'general',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at")
       .run(req.params.key, String(req.body.value), now())
-    saveDB(); res.json({ key: req.params.key, value: req.body.value })
+    db.saveDebounced(); res.json({ key: req.params.key, value: req.body.value })
   })
 }
 

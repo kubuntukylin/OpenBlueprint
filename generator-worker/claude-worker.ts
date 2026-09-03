@@ -118,7 +118,17 @@ If web frontend, also include:
 - Listen on process.env.PORT || 3000 (or 8080 for web frontends)
 - Use axios to call other agents by their env var URLs
 - Output COMPLETE, runnable code — no placeholders, no "// TODO"
-- Write each file, then npm install && npx tsc --noEmit to verify`
+- Write each file, then npm install && npx tsc --noEmit to verify
+
+  ## TESTING REQUIREMENTS
+  After creating all source files, you MUST also create tests:
+  1. Create a src/__tests__/ directory
+  2. Create at least src/__tests__/health.test.ts that tests GET /health returns success
+  3. Use vitest framework: import { describe, it, expect } from 'vitest'
+  4. Export the Express app (not start listening) from index.ts so tests can import it
+  5. After writing tests, run: npm install && npx vitest run
+  6. Fix any test failures by editing files until all tests pass
+  7. Use supertest for HTTP-level testing of Express routes when available`
 
   // Spawn claude.exe directly
   const isWin = process.platform === 'win32'
@@ -223,13 +233,31 @@ If web frontend, also include:
   const startCmd = hasReact ? 'npx vite --host 0.0.0.0' : 'npx tsx index.ts'
   const pkgJson = JSON.stringify({
     name: sanitizedName, version: '1.0.0', private: true,
-    scripts: { start: startCmd, build: 'npx tsc --noEmit' },
-    dependencies: baseDeps
+    scripts: { start: startCmd, build: 'npx tsc --noEmit', test: 'npx vitest run', 'test:watch': 'npx vitest' },
+    dependencies: baseDeps,
+    devDependencies: { vitest: '^4.0.0', ...(startCmd !== 'npx vite --host 0.0.0.0' ? {} : {}) }
   }, null, 2)
   writeFileSync(join(agentDir, 'package.json'), pkgJson, 'utf-8')
   allFiles.push('package.json')
   out({ type: 'file:generated', path: join(agentDir, 'package.json'), size: pkgJson.length, timestamp: Date.now() })
   out({ type: 'terminal', text: `  \x1b[32m✓\x1b[0m package.json\n`, stream: 'stdout', timestamp: Date.now() })
+
+  // Generate vitest.config.ts
+  const vitestConfig = `import { defineConfig } from 'vitest/config'
+export default defineConfig({
+  test: {
+    globals: true,
+    environment: 'node',
+    include: ['src/**/*.test.ts', 'src/**/*.spec.ts'],
+    testTimeout: 10_000,
+    reporters: ['verbose', 'json'],
+    outputFile: '.vitest-report.json'
+  }
+})
+`
+  writeFileSync(join(agentDir, 'vitest.config.ts'), vitestConfig, 'utf-8')
+  allFiles.push('vitest.config.ts')
+  out({ type: 'file:generated', path: join(agentDir, 'vitest.config.ts'), size: vitestConfig.length, timestamp: Date.now() })
 
   // Generate Dockerfile
   const defaultPort = isWebFrontend ? '8080' : '3000'

@@ -6,7 +6,7 @@ import type { Project, Agent, AgentRelationship, Conversation, Message, Generati
 
 // ---- UI Store ----
 interface UIState {
-  activeTab: 'chat' | 'skills' | 'agents' | 'process' | 'help'
+  activeTab: 'chat' | 'skills' | 'agents' | 'process' | 'tests' | 'help'
   theme: 'dark' | 'light'
   settingsOpen: boolean
   setActiveTab: (tab: UIState['activeTab']) => void
@@ -180,4 +180,28 @@ export const useGenerationStore = create<GenState>(set => ({
     return { sessions: next }
   }),
   setDockerState: (dockerState) => { localStorage.setItem('dockerState', dockerState); set({ dockerState }) },
+}))
+
+// ---- Notification Store (Toast messages) ----
+export interface Toast {
+  id: string
+  type: 'success' | 'error' | 'warning' | 'info'
+  message: string
+  duration: number
+}
+
+interface NotificationState {
+  toasts: Toast[]
+  addToast: (toast: Omit<Toast, 'id'>) => void
+  removeToast: (id: string) => void
+}
+export const useNotificationStore = create<NotificationState>((set, get) => ({
+  toasts: [],
+  addToast: (t) => {
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+    const toast = { ...t, id }
+    set(s => ({ toasts: [...s.toasts, toast] }))
+    if (t.duration !== 0) setTimeout(() => get().removeToast(id), t.duration || 5000)
+  },
+  removeToast: (id) => set(s => ({ toasts: s.toasts.filter(t => t.id !== id) })),
 }))

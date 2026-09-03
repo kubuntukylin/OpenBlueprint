@@ -38,8 +38,10 @@
 │       ↕ WebSocket    ↕ REST API    ↕ Vite HMR            │
 ├──────────────────────────────────────────────────────────┤
 │          Express Server (port 3001)                       │
-│  routes.ts │ generator.ts │ llm.ts │ memory.ts │ rag.ts  │
-│       ↕ sql.js (SQLite WASM — in-memory + persisted)     │
+│  routes.ts │ generator.ts │ queue.ts │ db.ts │ llm.ts    │
+│  memory.ts │ rag.ts │ mcp-server.ts │ log.ts             │
+│  test-runner.ts │ fix-dispatcher.ts │ project-test.ts    │
+│       ↕ sql.js (SQLite WASM — debounced persistence)     │
 ├──────────────────────────────────────────────────────────┤
 │            Claude Code CLI (Build Mode)                   │
 │  --mcp-config → MCP Server (stdio JSON-RPC)              │
@@ -114,6 +116,7 @@ output/Device-Service/
 │   └── services/         # Business logic / 业务逻辑
 ├── package.json          # Auto-detected dependencies / 自动检测依赖
 ├── Dockerfile            # Auto-generated / 自动生成
+├── vitest.config.ts      # Unit test config / 单元测试配置
 └── tsconfig.json         # TypeScript config
 ```
 
@@ -122,6 +125,21 @@ output/Device-Service/
 自动生成完整编排文件 — Gateway（统一入口 + Dashboard）+ 所有 Agent 容器 + 网络配置。
 
 *Automatically generates complete Docker Compose — Gateway (unified entry + dashboard) + all agent containers + network configuration.*
+
+### 可靠性 / Reliability
+
+- **持久化生成队列**：SQLite 队列 + 租约领取 + 心跳续租 + 死信（最多 3 次尝试）
+- **崩溃恢复**：五阶段 checkpoint（init/generate/validate/package/complete），服务重启后自动恢复卡住的生成任务
+- **三阶段优雅停机**：停止 HTTP → 排空生成中进程 → 最终落盘退出
+- **结构化日志**：Pino + 请求追踪，生成日志落库可追溯；崩溃自动生成报告文件
+
+*Persistent SQLite queue with lease-based claiming, phase-aware checkpoints and crash recovery, three-phase graceful shutdown, structured logging with crash reports.*
+
+### 自动化测试 / Automated Testing
+
+每个 Agent 生成后进入 **validating** 阶段：`npm install` → `tsc --noEmit` → vitest 单元测试。失败时按错误分类（编译/断言/缺依赖/运行时…）自动修复，最多 3 轮；无法修复则标记 `failed` 供人工处理。测试结果持久化到 `test_results` 表。
+
+*After generation every agent enters a validating phase: npm install → tsc --noEmit → vitest. Failures are categorized (compilation / assertion / missing dep / runtime…) and auto-fixed for up to 3 rounds; unfixable agents are marked failed. Results persist to the test_results table.*
 
 ---
 
@@ -194,10 +212,13 @@ User triggers Generate
  Spawn Claude Code CLI  (Write/Edit/Bash tools create project files)
        │
        ▼
- Post-process  (scan files, build package.json, Dockerfile, validate tsc)
+ Post-process  (scan files, build package.json, Dockerfile)
        │
        ▼
- Status: completed  (WebSocket broadcast / WebSocket广播)
+ Validate  (npm install → tsc --noEmit → vitest → auto-fix ≤3 rounds)
+       │
+       ▼
+ Status: completed / failed  (WebSocket broadcast / WebSocket广播)
 ```
 
 ### Web 前端自动检测 / Web Frontend Detection
@@ -212,6 +233,7 @@ User triggers Generate
 - ✅ `package.json` — 自动包含所有 import 依赖 / *Auto-includes all imports*
 - ✅ `Dockerfile` — 自动生成 / *Auto-generated*
 - ✅ TypeScript — 通过 `tsc --noEmit` 编译检查 / *Passes compilation*
+- ✅ 单元测试 — vitest 通过；失败自动修复最多 3 轮 / *Passes vitest; auto-fix up to 3 rounds*
 - ✅ `GET /health` — 每个 Agent 包含健康检查 / *Every agent has health endpoint*
 - ✅ 无占位符 — 代码完整可运行 / *No placeholders — complete, runnable code*
 
@@ -219,20 +241,22 @@ User triggers Generate
 
 ## Skills 技能系统 / Skills System
 
-系统预置 **30+ 技能模板**，Agent 生成时自动注入到 LLM 系统提示词：/ *30+ preset skill templates injected into LLM system prompts during code generation:*
+系统预置 **18 个技能模板**，可在 Skills 面板中自定义或禁用。/ *18 preset skill templates; customize or disable in the Skills panel:*
 
 | 分类 / Category | 技能 / Skills |
 |-----------------|--------------|
-| **架构 / Architecture** | Microservices, Agent Relationships, Service Dependencies, Event-Driven, Single Responsibility, API-First Design, Layered Building |
-| **API 规范 / API Standards** | REST API Pattern, Health Check, Pagination, Versioning, Rate Limiting |
-| **安全 / Security** | OWASP Top 10, Security Headers, JWT Auth, Least Privilege, Input Validation |
-| **前端 / Frontend** | React Dashboard, CORS Configuration |
+| **架构 / Architecture** | Microservices, Agent Relationship Types, Service Dependency Declaration |
+| **后端 / Backend** | REST API Pattern, Input Validation, TypeScript Strict, Error Handling Middleware, CORS Configuration, API Pagination, Rate Limiting |
+| **DevOps** | Health Check Endpoint, Docker Ready, Structured Logging, Environment-Based Config |
+| **认证 / Auth** | JWT Authentication |
 | **IoT** | MQTT Protocol, Time-Series Data |
-| **代码质量 / Quality** | TypeScript Strict, Structured Logging, Error Handling, Env-Based Config, Unit Testing |
+| **前端 / Frontend** | React Dashboard Frontend |
 
-每个 Skill 包含 `name`、`category`、`prompt_content`，可在 Skills 面板中自定义或禁用。
+每个 Skill 包含 `name`、`category`、`prompt_content`。
 
-*Each Skill has a name, category, and prompt_content. Customize or disable in the Skills panel.*
+*Each Skill has a name, category, and prompt_content.*
+
+> 提示：技能内容注入生成提示词的功能尚未接线（当前版本仅支持面板管理）。/ *Note: skill injection into generation prompts is not wired up yet.*
 
 ---
 
@@ -253,11 +277,15 @@ Build 模式下 Claude Code 通过 MCP (Model Context Protocol) 调用的工具�
 | `exec_shell` | 执行 Shell 命令 / Execute shell command |
 | `list_projects` | 列出所有项目 / List all projects |
 | `get_project_context` | 获取项目完整上下文 / Get full project context |
-| `create_relationship` | 创建 Agent 关系 / Create relationship |
-| `delete_relationship` | 删除关系 / Delete relationship |
-| `analyze_relationships` | 🤖 AI 自动分析创建关系 / AI auto-analyzes & creates relationships |
+| `create_relationship` | ⚠️ 创建 Agent 关系 / Create relationship（已实现，暂未注册） |
+| `delete_relationship` | ⚠️ 删除关系 / Delete relationship（已实现，暂未注册） |
+| `analyze_relationships` | ⚠️ 🤖 AI 自动分析创建关系 / AI auto-analyzes & creates relationships（已实现，暂未注册） |
 
 实现文件 / Implementation: [src/server/mcp-server.ts](src/server/mcp-server.ts)
+
+> ⚠️ 注：以上 3 个关系工具代码已实现但尚未注册到 MCP 服务，Build 模式当前实际可用 **11 个工具**。关系管理可通过 REST API 完成：`POST /api/relationships`、`DELETE /api/relationships/:id`、`POST /api/projects/:id/analyze-relationships`。
+>
+> *Note: the 3 relationship tools are implemented but not yet registered — Build mode currently exposes 11 tools. Relationship management is available via the REST API.*
 
 ---
 
@@ -334,24 +362,38 @@ OpenBlueprint/
 │   │   ├── ChatPanel.tsx      # Chat + Build 面板
 │   │   ├── AgentGraph.tsx     # Agent 依赖关系图 / Dependency graph
 │   │   ├── ProcessPanel.tsx   # 生成进度 + Docker 构建 / Generation & build
+│   │   ├── TestPanel.tsx      # 测试结果面板 / Test results
 │   │   ├── Sidebar.tsx        # 项目/Agent 列表 / Project & agent list
 │   │   ├── SettingsPanel.tsx  # 设置 / Settings
 │   │   ├── SkillsPanel.tsx    # 技能管理 / Skills management
+│   │   ├── HelpPanel.tsx      # 帮助文档 / Help docs
+│   │   ├── BuildBoard.tsx     # Build 看板 / Build board
+│   │   ├── StatusBar.tsx      # 状态栏 / Status bar
+│   │   ├── Toast.tsx          # 通知 / Toasts
+│   │   ├── ErrorBoundary.tsx  # 错误边界 / Error boundary
 │   │   ├── stores.ts          # Zustand 状态管理 / State
 │   │   └── api.ts             # HTTP + WebSocket client
 │   ├── server/                # Express 后端 / Express Backend
-│   │   ├── index.ts           # 入口 + WebSocket / Entry
+│   │   ├── index.ts           # 入口 + WebSocket + 崩溃恢复 / Entry + crash recovery
 │   │   ├── routes.ts          # 40+ API endpoints
-│   │   ├── generator.ts       # 代码生成调度 / Generation orchestrator
+│   │   ├── generator.ts       # 生成调度 + 队列轮询 / Orchestrator + queue poller
+│   │   ├── queue.ts           # 持久化队列（租约/死信）/ Persistent queue
 │   │   ├── llm.ts             # LLM Provider
-│   │   ├── db.ts              # SQLite (sql.js)
+│   │   ├── db.ts              # SQLite (sql.js) + 12 个迁移 / migrations
 │   │   ├── memory.ts          # 对话记忆 / Memory
 │   │   ├── rag.ts             # RAG 检索增强
-│   │   └── mcp-server.ts      # MCP stdio proxy
+│   │   ├── mcp-server.ts      # MCP stdio proxy
+│   │   ├── log.ts             # 结构化日志 / Structured logging
+│   │   ├── test-runner.ts     # 测试流水线 / Test pipeline
+│   │   ├── error-analyzer.ts  # 错误分类 / Error categorization
+│   │   ├── fix-dispatcher.ts  # 自动修复 / Auto-fix dispatcher
+│   │   ├── project-test.ts    # 项目级集成测试 / Integration tests
+│   │   └── resilience.ts      # 韧性策略 / Resilience policies
 │   └── shared/types/          # 共享类型定义 / Shared types
 ├── generator-worker/          # 代码生成 Worker / Generation worker
 ├── docs/USER_GUIDE.md         # 详细使用指南 / Detailed user guide
 ├── mcp-config.json            # MCP configuration
+├── vitest.config.ts           # Vitest config
 └── vite.config.ts             # Vite build config
 ```
 
@@ -362,10 +404,23 @@ OpenBlueprint/
 | 层 / Layer | 技术 / Technology |
 |------------|------------------|
 | **Frontend** | React 19, TypeScript 5.8, Zustand 5, React Flow, Monaco Editor, XTerm.js, Tailwind CSS 4 |
-| **Backend** | Express 5, WebSocket (ws), sql.js (SQLite WASM), Node.js 24 |
+| **Backend** | Express 5, WebSocket (ws), sql.js (SQLite WASM), Node.js 18+ |
 | **AI / LLM** | DeepSeek V4 Pro, Claude Code CLI, MCP (Model Context Protocol), OpenAI SDK |
+| **可靠性 / Reliability** | Cockatiel (resilience policies), Pino (structured logging), persistent queue + checkpoints |
+| **测试 / Testing** | Vitest, error categorization + auto-fix loop |
 | **Build** | Vite 7, tsx, concurrently |
 | **Container** | Docker, Docker Compose |
+
+---
+
+## 已知问题 / Known Issues
+
+| 问题 / Issue | 状态 / Status |
+|--------------|---------------|
+| MCP 关系工具（`create_relationship` / `delete_relationship` / `analyze_relationships`）已实现但未注册，Build 模式当前可用 11 个工具；关系管理可用 REST API 完成 | 待修复 / to fix |
+| Skills 技能内容尚未注入代码生成提示词 | 待接线 / to wire up |
+| Tests 面板的数据接口尚未实现（生成时的自动测试不受影响） | 待实现 / to implement |
+| `npm run typecheck` 暂只覆盖前端与 shared 代码 | 待完善 / to improve |
 
 ---
 

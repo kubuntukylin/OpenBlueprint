@@ -15,6 +15,7 @@
 9. [设置与配置](#9-设置与配置)
 10. [Docker 部署](#10-docker-部署)
 11. [常见问题](#11-常见问题)
+12. [已知问题](#12-已知问题)
 
 ---
 
@@ -33,6 +34,8 @@ OpenBlueprint 是一个**AI 驱动的低代码微服务开发平台**。它的�
 | **依赖管理** | 自动建立 Agent 之间的 `depends_on`、`communicates_with`、`shares_data` 关系 |
 | **可视化编辑** | 在画布上拖拽 Agent 节点，编辑连线，查看数据流向 |
 | **Docker 部署** | 一键生成 Docker Compose，所有 Agent 容器化运行 |
+| **自动化测试** | 生成后自动执行编译检查 + 单元测试，失败自动修复（最多 3 轮） |
+| **崩溃恢复** | 服务重启后自动恢复未完成的生成任务（持久队列 + 检查点） |
 | **持续迭代** | 在 Chat 中说"给 Device Service 加一个批量导入功能"，AI 修改代码 |
 
 ### 1.2 与直接使用 Claude Code 的区别
@@ -289,7 +292,7 @@ AI 会通过 MCP 工具链：
 |------|-----------|------------|
 | **底层引擎** | DeepSeek API（直接调用） | Claude Code CLI + MCP Server |
 | **能力** | 对话、分析、建议 | 执行操作（创建/修改/删除 Agent、读写文件、执行命令） |
-| **工具调用** | 无 | 14 个 MCP 工具（含关系管理） |
+| **工具调用** | 无 | 11 个 MCP 工具（3 个关系工具待注册） |
 | **适用场景** | 需求分析、架构讨论、代码审查 | Agent CRUD、代码生成、系统操作 |
 | **可逆性** | 只是对话，不影响系统 | 真实修改系统状态 |
 
@@ -397,27 +400,34 @@ AI 会通过 MCP 工具链：
 │  - 扫描生成的文件           │
 │  - 创建 package.json       │
 │  - 创建 Dockerfile         │
-│  - 验证 TypeScript 编译     │
 └──────┬───────────────────┘
        │
        ▼
-┌──────────────────┐
-│  更新状态: completed│
-│  WebSocket 广播     │
-└──────────────────┘
+┌──────────────────────────┐
+│  Validating 验证阶段       │
+│  - npm install            │
+│  - tsc --noEmit 编译检查   │
+│  - vitest 单元测试         │
+│  - 失败 → 自动修复（≤3轮）  │
+└──────┬───────────────────┘
+       │
+       ▼
+┌──────────────────────┐
+│  completed / failed   │
+│  WebSocket 广播        │
+└──────────────────────┘
 ```
 
 ### 6.2 两种生成方式
 
-**Claude Code Generate（推荐）：**
-- 使用 Claude Code CLI 的 Write 工具直接创建文件
+**Claude Code Generate：**
+- 使用 Claude Code CLI 的 Write 工具直接创建文件（需要本地安装 Claude Code CLI）
 - AI 自主决定文件结构和内容
-- 生成后运行 `npm install && npx tsc --noEmit` 验证
 - 适合复杂 Agent，能处理多文件依赖
 
 **API Generate：**
-- 使用 DeepSeek API 直接生成代码
-- 基于模板进行文件创建
+- 使用 DeepSeek API 直接生成代码（稳定可靠，默认推荐）
+- 基于 `FILE:` 格式解析生成文件
 - 适合简单 Agent 或需要特定格式的场景
 
 ### 6.3 Web 前端检测
@@ -448,6 +458,7 @@ browser | dashboard | 网页 | 前端 | 网站 | 页面 | 界面 | 图形化 | �
 - [x] `package.json` 自动生成，包含所有 import 的依赖
 - [x] `Dockerfile` 自动生成
 - [x] TypeScript 文件通过 `tsc --noEmit` 编译检查
+- [x] vitest 单元测试通过（失败自动修复最多 3 轮，仍未通过则标记 failed）
 - [x] 所有文件无占位符（"TODO"、"implement later" 等）
 - [x] `GET /health` 端点响应 `{ success: true, service: '<agent_name>' }`
 
@@ -457,58 +468,45 @@ browser | dashboard | 网页 | 前端 | 网站 | 页面 | 界面 | 图形化 | �
 
 ### 7.1 什么是 Skill
 
-Skill 是**系统提示词片段**，在 Agent 生成时自动注入到 Claude Code / LLM 的上下文中。它们定义了代码的风格、规范和约束。
+Skill 是**系统提示词片段**（名称、分类、提示词内容），用于定义生成代码的风格、规范和约束。可在 Skills 面板中创建、编辑、启用/禁用。
+
+> 提示：当前版本中技能内容尚未接入代码生成流程（注入功能待接线），面板用于提前管理这些模板。
 
 ### 7.2 预置技能列表
 
 `[SCREENSHOT: skills-list.png]`
 
-系统预置了 30+ 技能模板，分为以下几类：
+系统预置了 18 个技能模板，分为以下几类：
 
-**架构类：**
+**架构类（architecture）：**
 - Microservices Architecture — 微服务设计原则
 - Agent Relationship Types — 🤖 定义 depends_on / communicates_with / shares_data 三种关系
 - Service Dependency Declaration — 创建 Agent 时自动声明依赖
-- Event-Driven Architecture — 事件驱动通信优先
-- Single Responsibility Principle — 单一职责原则
-- API-First Design — API 优先设计
-- Layered Building — 分层构建策略
 
-**API 规范类：**
+**后端类（backend）：**
 - REST API Pattern — REST 接口规范
-- Health Check Endpoint — 健康检查端点（必装）
+- Input Validation — 输入校验
+- TypeScript Strict Mode — 严格 TypeScript
+- Error Handling Middleware — 错误处理中间件
+- CORS Configuration — 跨域配置
 - API Pagination — 分页支持
-- API Versioning Strategy — 版本化策略
 - Rate Limiting — 限流
 
-**安全类：**
-- OWASP Top 10 Defense — 安全防护
-- API Security Headers — 安全响应头
+**DevOps 类（devops）：**
+- Health Check Endpoint — 健康检查端点（必装）
+- Docker Ready — Docker 就绪
+- Structured Logging — 结构化日志
+- Environment-Based Config — 环境变量配置
+
+**认证类（auth）：**
 - JWT Authentication — JWT 认证
-- Least Privilege Access — 最小权限
-- Data Validation at Boundaries — 边界数据校验
-- Input Validation — 输入校验
 
-**前端类：**
-- React Dashboard Frontend — React SPA 规范
-- CORS Configuration — 跨域配置
-
-**IoT 类：**
+**IoT 类（iot）：**
 - MQTT IoT Protocol — MQTT 协议
 - Time-Series Data — 时序数据处理
 
-**代码质量类：**
-- TypeScript Strict Mode — 严格 TypeScript
-- Structured Logging — 结构化日志
-- Error Handling Middleware — 错误处理中间件
-- Environment-Based Config — 环境变量配置
-- Docker Ready — Docker 就绪
-- Testability First — 可测试性优先
-- Unit Testing Required — 单元测试要求
-- Fail Fast Report Clearly — 快速失败
-- Code Review Checklist — 代码审查清单
-- Dependency Hygiene — 依赖规范
-- README Standards — 文档规范
+**前端类（frontend）：**
+- React Dashboard Frontend — React SPA 规范
 
 ### 7.3 自定义 Skill
 
@@ -554,6 +552,12 @@ Agent 之间通过三种关系连接，确保正确的构建顺序和服务发�
 2. 输入 "analyze relationships" 或 "分析我的 agent 关系"
 3. Claude Code 会调用 `analyze_relationships` 工具，自动读取所有 Agent 的接口定义，创建关系
 
+> 已知问题：`analyze_relationships` MCP 工具当前尚未注册（见 §12 已知问题）。可先直接调用 REST API 完成自动分析：
+>
+> ```bash
+> curl -X POST http://localhost:3001/api/projects/<projectId>/analyze-relationships
+> ```
+
 ### 8.3 手动管理
 
 在 Agent Graph 页面中：
@@ -565,7 +569,7 @@ Agent 之间通过三种关系连接，确保正确的构建顺序和服务发�
 
 ## 9. 设置与配置
 
-### 8.1 LLM 配置
+### 9.1 LLM 配置
 
 `[SCREENSHOT: settings-llm-config.png]`
 
@@ -590,7 +594,7 @@ Agent 之间通过三种关系连接，确保正确的构建顺序和服务发�
 - 返回成功/失败 + 延迟 + 响应预览
 - 用于验证 API Key 和网络连通性
 
-### 8.2 系统设置
+### 9.2 系统设置
 
 | 设置项 | 默认值 | 说明 |
 |--------|--------|------|
@@ -600,18 +604,18 @@ Agent 之间通过三种关系连接，确保正确的构建顺序和服务发�
 | **Max Retries** | 3 | 代码生成失败最大重试次数 |
 | **Generation Timeout** | 120000ms | 单次生成超时时间 |
 | **Auto Save Conversations** | true | 自动保存对话历史 |
-| **Docker Registry** | (空) | 私有镜像仓库地址 |
+| **Docker Registry** | (空) | 私有镜像仓库地址（当前版本尚未生效，Dockerfile 使用自建 node-local 基础镜像） |
 
 ---
 
 ## 10. Docker 部署
 
-### 9.1 前提条件
+### 10.1 前提条件
 
 - Docker Desktop 已安装并运行
 - Agent 代码已生成（status = completed）
 
-### 9.2 生成 Docker Compose
+### 10.2 生成 Docker Compose
 
 `[SCREENSHOT: docker-compose-generation.png]`
 
@@ -622,7 +626,7 @@ Agent 之间通过三种关系连接，确保正确的构建顺序和服务发�
    - Gateway 服务（统一入口 + Dashboard）
    - `docker-compose.yml`
 
-### 9.3 Docker Compose 架构
+### 10.3 Docker Compose 架构
 
 ```
                     ┌─────────────┐
@@ -650,7 +654,7 @@ Agent 之间通过三种关系连接，确保正确的构建顺序和服务发�
 环境变量: AUTH_SERVICE_URL=http://auth-service:3000
 ```
 
-### 9.4 启动和调试
+### 10.4 启动和调试
 
 ```bash
 # 启动全部服务
@@ -708,6 +712,13 @@ docker compose down
 - 服务器关闭时强制保存（SIGINT/SIGTERM/unhandledRejection）
 - 登录后自动恢复上次会话数据
 
+### Q: 服务重启后，生成到一半的任务会怎样？
+
+生成任务使用持久队列（租约 + 心跳）+ 五阶段检查点保存进度。服务重启时会自动：
+- 检查点显示已完成的 Agent → 直接恢复为 completed/failed
+- 生成中途（spec 文件仍在）→ 自动重新入队继续生成
+- 无可用检查点 → 重置为 pending，可手动重新触发
+
 ### Q: 如何更新 Agent 代码？
 
 1. 在 Chat 中描述修改需求
@@ -739,5 +750,16 @@ Build 模式下的 Claude Code 配置了受限的工具权限：
 - `--allowedTools Write,Edit,Read,Bash,Glob,Grep`
 - 没有网络访问权限（除 npm install）
 - MCP 工具通过 `localhost:3001` 间接操作，所有变更可追踪
+
+---
+
+## 12. 已知问题
+
+| 问题 | 影响 | 状态 / 绕过 |
+|------|------|-------------|
+| MCP 关系工具（create_relationship / delete_relationship / analyze_relationships）已实现但未注册 | Build 模式下 Claude Code 调用会报 "Unknown tool" | 用 REST API 管理关系（见 §8.2） |
+| Skills 技能内容尚未注入生成提示词 | Skills 面板仅用于管理模板，暂不影响生成 | 待接线 |
+| Tests 页签的数据接口未实现 | 面板暂无数据 | 生成时的自动测试不受影响（validating 阶段执行，结果存于 test_results 表） |
+| `npm run typecheck` 暂只覆盖前端与 shared 代码 | server / worker 代码未参与类型检查 | 待完善 |
 
 ---

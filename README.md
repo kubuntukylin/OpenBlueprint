@@ -277,15 +277,9 @@ Build 模式下 Claude Code 通过 MCP (Model Context Protocol) 调用的工具�
 | `exec_shell` | 执行 Shell 命令 / Execute shell command |
 | `list_projects` | 列出所有项目 / List all projects |
 | `get_project_context` | 获取项目完整上下文 / Get full project context |
-| `create_relationship` | ⚠️ 创建 Agent 关系 / Create relationship（已实现，暂未注册） |
-| `delete_relationship` | ⚠️ 删除关系 / Delete relationship（已实现，暂未注册） |
-| `analyze_relationships` | ⚠️ 🤖 AI 自动分析创建关系 / AI auto-analyzes & creates relationships（已实现，暂未注册） |
 
 实现文件 / Implementation: [src/server/mcp-server.ts](src/server/mcp-server.ts)
 
-> ⚠️ 注：以上 3 个关系工具代码已实现但尚未注册到 MCP 服务，Build 模式当前实际可用 **11 个工具**。关系管理可通过 REST API 完成：`POST /api/relationships`、`DELETE /api/relationships/:id`、`POST /api/projects/:id/analyze-relationships`。
->
-> *Note: the 3 relationship tools are implemented but not yet registered — Build mode currently exposes 11 tools. Relationship management is available via the REST API.*
 
 ---
 
@@ -410,17 +404,6 @@ OpenBlueprint/
 | **测试 / Testing** | Vitest, error categorization + auto-fix loop |
 | **Build** | Vite 7, tsx, concurrently |
 | **Container** | Docker, Docker Compose |
-
----
-
-## 已知问题 / Known Issues
-
-| 问题 / Issue | 状态 / Status |
-|--------------|---------------|
-| MCP 关系工具（`create_relationship` / `delete_relationship` / `analyze_relationships`）已实现但未注册，Build 模式当前可用 11 个工具；关系管理可用 REST API 完成 | 待修复 / to fix |
-| Skills 技能内容尚未注入代码生成提示词 | 待接线 / to wire up |
-| Tests 面板的数据接口尚未实现（生成时的自动测试不受影响） | 待实现 / to implement |
-| `npm run typecheck` 暂只覆盖前端与 shared 代码 | 待完善 / to improve |
 
 ---
 
